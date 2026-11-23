@@ -1,0 +1,23 @@
+# Build de Android
+.gradle/
+build/
+app/build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+
+# Firma local (NUNCA subir)
+keystore.properties
+*.jks
+*.keystore
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+local.properties
+
+# CI (se puede añadir luego con permiso workflow)
+.github/
