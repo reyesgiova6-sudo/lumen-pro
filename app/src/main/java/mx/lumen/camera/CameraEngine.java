@@ -580,6 +580,7 @@ public class CameraEngine {
 
         SurfaceTexture st = textureView.getSurfaceTexture();
         if (st == null) return;
+        previewFrames = 0;
         st.setDefaultBufferSize(previewSize.getWidth(), previewSize.getHeight());
         float[] tm = new float[16];
         st.getTransformMatrix(tm);
@@ -663,8 +664,15 @@ public class CameraEngine {
                 public void onCaptureCompleted(CameraCaptureSession s, CaptureRequest request,
                                                TotalCaptureResult result) {
                     lastPreviewResult = result;
+                    if (previewFrames < 20) {
+                        previewFrames++;
+                        // La matriz del SurfaceTexture se conoce tras los primeros frames.
+                        activity.runOnUiThread(CameraEngine.this::updatePreviewTransform);
+                    }
                 }
             };
+
+    private int previewFrames;
 
     private void applyCommon(CaptureRequest.Builder b) {
         b.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
@@ -1368,22 +1376,36 @@ public class CameraEngine {
         int vh = textureView.getHeight();
         if (vw == 0 || vh == 0) return;
 
-        int rot = previewRotation();
-        float bw = previewSize.getWidth();
-        float bh = previewSize.getHeight();
-        // Dimensiones del búfer ya rotado (caja que debe cubrir la pantalla).
-        float rotatedW = rot % 180 == 0 ? bw : bh;
-        float rotatedH = rot % 180 == 0 ? bh : bw;
+        boolean halRot = halRotatesPreview();
+        int rot;
+        if (rotationOverride >= 0) {
+            rot = ((rotationOverride % 360) + 360) % 360;
+        } else {
+            rot = halRot ? 0
+                    : ((Util.jpegRotation(sensorOrientation, displayRotation, false)) + 360) % 360;
+        }
+
+        // Dimensiones naturales del contenido tal como llega a la capa.
+        float cw = previewSize.getWidth();
+        float ch = previewSize.getHeight();
+        if (halRot) {
+            float t = cw;
+            cw = ch;
+            ch = t;
+        }
+        float rotatedW = rot % 180 == 0 ? cw : ch;
+        float rotatedH = rot % 180 == 0 ? ch : cw;
 
         float cx = vw / 2f;
         float cy = vh / 2f;
         float cover = Math.max(vw / rotatedW, vh / rotatedH);
 
-        // TextureView estira el búfer a todo el view. Deshacemos ese estiramiento,
-        // aplicamos escala uniforme, rotación y centrado (todo en espacio de view).
+        // TextureView estira el búfer a todo el view; deshacemos ese
+        // estiramiento con el aspecto real (ya rotado por el HAL), escalamos
+        // para cubrir y centramos.
         android.graphics.Matrix m = new android.graphics.Matrix();
         m.postTranslate(-cx, -cy);
-        m.postScale(bw / (float) vw, bh / (float) vh);
+        m.postScale(cw / (float) vw, ch / (float) vh);
         m.postScale(cover, cover);
         m.postRotate(rot);
         m.postTranslate(cx, cy);
@@ -1391,6 +1413,21 @@ public class CameraEngine {
             m.postScale(-1f, 1f, cx, cy);
         }
         textureView.setTransform(m);
+    }
+
+    /** El HAL puede entregar la vista previa pre-rotada mediante la matriz del SurfaceTexture. */
+    private boolean halRotatesPreview() {
+        if (textureView == null) return false;
+        SurfaceTexture st = textureView.getSurfaceTexture();
+        if (st == null) return false;
+        try {
+            float[] m = new float[16];
+            st.getTransformMatrix(m);
+            // Una rotación de 90°/270° se detecta por los términos fuera de la diagonal.
+            return Math.abs(m[1]) > 0.2f || Math.abs(m[4]) > 0.2f;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private void closeReaders() {
